@@ -1,65 +1,121 @@
-from typing import Dict, Tuple
+# app/cli/menu_printer.py
+from typing import Dict, Tuple, Optional
 from rich.console import Console
 from cli import constants
 from domain.MenuFunctions import MenuFunctions
 import db
 import sys
+
 _console = Console()
+
+# -----------------------------
+# Menus (module-level constant)
+# -----------------------------
 _menus: Dict[int, str] = {
-    constants.LOGIN_MENU: "----\nWelcome to Kiwi\n----\n1. Login\n0. Exit",
-    constants.MAIN_MENU: "----\nMain Menu\n----\n1. Manage Users\n2. Manage portfolios\n3. Market places\n0. Logout",
-    constants.MANAGE_USERS_MENU: "----\nManage Users\n----\n1. View User\n2. Add User\n3. Delete Users\n0. Back to Main Menu"
+    # Login menu
+    constants.LOGIN_MENU: """[bold]Login[/bold]
+----
+1. Login
+0. Exit
+""",
+
+    # Main menu
+    constants.MAIN_MENU: """[bold]Main Menu[/bold]
+----
+1. Manage Users
+2. Manage portfolios
+3. Marketplace
+0. Logout
+""",
+
+    # Manage Users (admin only)
+    constants.MANAGE_USERS_MENU: """[bold]Manage Users[/bold]
+----
+1. View users
+2. Create new user
+3. Delete user
+0. Back
+"""
 }
 
+# ------------------------------------------------
+# UI helpers (kept minimal; pure presentation only)
+# ------------------------------------------------
+def print_error(message: str) -> None:
+    """Print an error message in a consistent style."""
+    _console.print(f"[bold red]Error:[/bold red] {message}")
 
+def print_success(message: str) -> None:
+    """Print a success message in a consistent style."""
+    _console.print(f"[bold green]{message}[/bold green]")
 
+# ----------------------------------------------------
+# (A) Gather login inputs (with hidden password input)
+# ----------------------------------------------------
 def get_login_inputs() -> tuple[str, str]:
+    """Prompt for username and password (visible while typing)."""
     username = _console.input("Username: ")
-    password = _console.input("Password: ")
-    _console.print("\n")
+    password = _console.input("Password: ")  # restored visible input
+    _console.print("")
     return username, password
 
-# throw an error if login fails, return nothing otherwise
-def login():
+# -------------------------------------------------
+# (B) Robust integer input (no ValueError crashes)
+# -------------------------------------------------
+def _ask_int(prompt: str) -> int:
+    """Keep asking until the user enters a valid integer."""
+    while True:
+        s = _console.input(prompt)
+        try:
+            return int(s)
+        except ValueError:
+            print_error("Please enter a number (e.g., 1, 2, 3).")
+
+# --------------------------------------------------------
+# (C) Login executor: set session and navigate to main menu
+# --------------------------------------------------------
+def login() -> None:
+    """Authenticate user; on success set session and go to main menu."""
     username, password = get_login_inputs()
-    user =db.query_user(username)
-    # either the user is none so the username is incorrect
-    # if not user:
-    #     print_error("Username does not exist")
-    #     print_menu(constants.LOGIN_MENU)
-        
-    # else:
-    #     if user.password == password:
-    #         print_menu(constants.MAIN_MENU)
-    #     else:
-    #         print_error("Login failed")
-    #         print_menu(constants.LOGIN_MENU)
-    if not user or user.password != password:
-            raise Exception("Error: Login failed")
-    
-    
-# purpose: to define the functions that needs to be executed depending on the user selection
-# user selection depends on the menu
-_router: Dict[str, MenuFunctions] = {
-    "0.1": MenuFunctions(executor=login, navigator=lambda: constants.MAIN_MENU) # login
-}
+    # Use db.login to validate; it raises ValueError on failure
+    user = db.login(username, password)
+    db.current_user = user  # record session (simple in-memory session)
+    print_success(f"Welcome, {user.firstname}!")
+    print_menu(constants.MAIN_MENU)
 
+# ----------------------------------------------------
+# (D) Router handler: fallbacks and correct navigation
+# ----------------------------------------------------
+def handle_user_selection(menu_id: int, user_selection: int) -> None:
+    """
+    Central dispatcher:
+    - Handles explicit 'Back/Exit/Logout' for known menus.
+    - Looks up in _router; if not found, shows an error and stays on current menu.
+    - Catches business exceptions and keeps the user in the current menu.
+    """
 
-def print_error(error: str):
-    _console.print(error, style="red")
+    # Login menu: 0 = Exit
+    if menu_id == constants.LOGIN_MENU and user_selection == 0:
+        sys.exit(0)
 
+    # Manage Users: 0 = Back (return to Main Menu)
+    if menu_id == constants.MANAGE_USERS_MENU and user_selection == 0:
+        return print_menu(constants.MAIN_MENU)
 
-def handle_user_selection(menu_id: int, user_selection: int):
-    # handle terminal inputs (the 0 option)
-    if user_selection == 0:
-        if menu_id == constants.LOGIN_MENU:
-            sys.exit(0) #terminate the application
-        elif menu_id == constants.MAIN_MENU:
-            print_menu(constants.LOGIN_MENU)
-        else:
-            print_menu(constants.LOGIN_MENU)
-    formatted_user_input = f"{str(menu_id)}.{str(user_selection)}"
-    menu_functions = _router[formatted_user_input]
+    # Main Menu: 0 = Logout (return to Login Menu)
+    if menu_id == constants.MAIN_MENU and user_selection == 0:
+        return print_menu(constants.LOGIN_MENU)
+
+    # Build router key and resolve target action
+    formatted_user_input = f"{menu_id}.{user_selection}"
+    menu_functions = _router.get(formatted_user_input)  # type: ignore[name-defined]
+
+    # Unregistered option → friendly message and stay on the same menu
+    if not menu_functions:
+        print_error("Invalid option. Please choose a valid menu item.")
+        return print_menu(menu_id)
+
+    # Execute and/or navigate with robust exception handling
     try:
         if menu_functions.executor:
             menu_functions.executor()
@@ -69,9 +125,34 @@ def handle_user_selection(menu_id: int, user_selection: int):
         print_error(str(e))
         print_menu(menu_id)
 
-def print_menu(menu_id: int):
+# ----------------------------------------------
+# (E) Print the menu and read a safe int choice
+# ----------------------------------------------
+def print_menu(menu_id: int) -> None:
+    """Render a menu by ID, then read a safe integer selection and dispatch."""
     _console.print(_menus[menu_id])
-    user_selection = int(_console.input(">> ")) # check if the user input is valid
+    user_selection = _ask_int(">> ")
     handle_user_selection(menu_id, user_selection)
-    
+
+# -------------------------
+# Router (register actions)
+# -------------------------
+# Only register what's already implemented in your codebase.
+# Keep it minimal to match your class demo. We wire up just:
+# - Login menu: option 1 -> login()
+# Other menus (Manage Users / Portfolios / Marketplace) can be added later
+# feature-by-feature without changing the structure here.
+_router: Dict[str, MenuFunctions] = {
+    # Login menu: choose 1 to perform login() (navigation happens inside login)
+    f"{constants.LOGIN_MENU}.1": MenuFunctions(
+        executor=login,
+        navigator=None,
+    ),
+
+    # Examples for future features (leave commented until implemented):
+    # f"{constants.MAIN_MENU}.1": MenuFunctions(executor=None, navigator=lambda: constants.MANAGE_USERS_MENU),
+    # f"{constants.MAIN_MENU}.2": MenuFunctions(executor=None, navigator=lambda: constants.MANAGE_PORTFOLIOS_MENU),
+    # f"{constants.MAIN_MENU}.3": MenuFunctions(executor=None, navigator=lambda: constants.MARKETPLACE_MENU),
+}
+
     
