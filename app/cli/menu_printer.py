@@ -114,6 +114,49 @@ def view_securities_executor() -> None:
         )
 
     _console.print(table)
+def _ask_positive_float(prompt: str) -> float:
+    """Ask until a positive float is provided."""
+    while True:
+        s = _console.input(prompt)
+        try:
+            val = float(s)
+            if val <= 0:
+                raise ValueError
+            return val
+        except ValueError:
+            print_error("Please enter a positive number (e.g., 1 or 2.5).")
+
+def buy_security_executor() -> None:
+    """
+    Executor for Marketplace -> 'Add security to a portfolio (Buy)'.
+    Prompts: Portfolio ID, Ticker, Quantity.
+    Uses reference price by default.
+    """
+    # Show user's portfolios (short summary) to help choose an ID
+    if db.current_user:
+        portfolios = db.list_portfolios(owner_username=db.current_user.username)
+        if portfolios:
+            _console.print("[bold]Your portfolios:[/bold]")
+            t = Table(show_header=True, header_style="bold")
+            t.add_column("ID", justify="right")
+            t.add_column("Name", justify="left")
+            for p in portfolios:
+                t.add_row(str(p["id"]), str(p["name"]))
+            _console.print(t)
+
+    pid = _ask_int("Portfolio ID: ")
+    ticker = _console.input("Ticker: ").strip().upper()
+    qty = _ask_positive_float("Quantity: ")
+
+    try:
+        result = db.buy_security(portfolio_id=pid, ticker=ticker, quantity=qty, price=None)
+        print_success(
+            f"Bought {result['quantity']} {result['ticker']} @ {result['price']:.2f} "
+            f"(cost {result['cost']:.2f}). New balance: {result['balance_after']:.2f}"
+        )
+    except Exception as e:
+        print_error(str(e))
+
 
 # ----------------------------------------------------
 # (D) Router handler: fallbacks and correct navigation
@@ -195,9 +238,10 @@ _router: Dict[str, MenuFunctions] = {
     executor=view_securities_executor,
     navigator=None,
     ),
+    # Marketplace: 2 = buy security
     f"{constants.MARKETPLACE_MENU}.2": MenuFunctions(
-        executor=lambda: print_success("TODO: Add security to a portfolio."),
-        navigator=None,
+    executor=buy_security_executor,
+    navigator=None,
     ),
 }
 
