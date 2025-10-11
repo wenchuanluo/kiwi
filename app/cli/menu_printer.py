@@ -5,6 +5,7 @@ from cli import constants
 from domain.MenuFunctions import MenuFunctions
 import db
 import sys
+from rich.table import Table
 
 _console = Console()
 
@@ -34,6 +35,13 @@ _menus: Dict[int, str] = {
 1. View users
 2. Create new user
 3. Delete user
+0. Back
+""",
+ # NEW: Marketplace (accessible to all users)
+    constants.MARKETPLACE_MENU: """[bold]Marketplace[/bold]
+----
+1. View available securities
+2. Add security to a portfolio (Buy)
 0. Back
 """
 }
@@ -82,6 +90,30 @@ def login() -> None:
     db.current_user = user  # record session (simple in-memory session)
     print_success(f"Welcome, {user.firstname}!")
     print_menu(constants.MAIN_MENU)
+    
+def view_securities_executor() -> None:
+    """
+    Executor for Marketplace -> 'View securities'.
+    Prints a simple table: ticker, name, reference price.
+    """
+    rows = db.list_securities()
+    if not rows:
+        print_error("No securities available.")
+        return
+
+    table = Table(title="Available Securities")
+    table.add_column("Ticker", justify="left")
+    table.add_column("Name", justify="left")
+    table.add_column("Reference Price", justify="right")
+
+    for r in rows:
+        table.add_row(
+            str(r["ticker"]),
+            str(r["name"]),
+            f'{float(r["reference_price"]):.2f}'
+        )
+
+    _console.print(table)
 
 # ----------------------------------------------------
 # (D) Router handler: fallbacks and correct navigation
@@ -105,6 +137,11 @@ def handle_user_selection(menu_id: int, user_selection: int) -> None:
     # Main Menu: 0 = Logout (return to Login Menu)
     if menu_id == constants.MAIN_MENU and user_selection == 0:
         return print_menu(constants.LOGIN_MENU)
+    
+        # Marketplace: 0 = Back (return to Main Menu)
+    if menu_id == constants.MARKETPLACE_MENU and user_selection == 0:
+        return print_menu(constants.MAIN_MENU)
+
 
     # Build router key and resolve target action
     formatted_user_input = f"{menu_id}.{user_selection}"
@@ -143,16 +180,26 @@ def print_menu(menu_id: int) -> None:
 # Other menus (Manage Users / Portfolios / Marketplace) can be added later
 # feature-by-feature without changing the structure here.
 _router: Dict[str, MenuFunctions] = {
-    # Login menu: choose 1 to perform login() (navigation happens inside login)
-    f"{constants.LOGIN_MENU}.1": MenuFunctions(
-        executor=login,
+    # Existing entries
+    f"{constants.LOGIN_MENU}.1": MenuFunctions(executor=login, navigator=None),
+
+    # Main Menu navigations
+    f"{constants.MAIN_MENU}.1": MenuFunctions(executor=None, navigator=lambda: constants.MANAGE_USERS_MENU),
+    f"{constants.MAIN_MENU}.2": MenuFunctions(executor=None, navigator=lambda: constants.MANAGE_PORTFOLIOS_MENU),
+
+    # NEW: Main Menu option 3 navigates to Marketplace menu
+    f"{constants.MAIN_MENU}.3": MenuFunctions(executor=None, navigator=lambda: constants.MARKETPLACE_MENU),
+
+    # Placeholder: Future Marketplace actions
+    f"{constants.MARKETPLACE_MENU}.1": MenuFunctions(
+    executor=view_securities_executor,
+    navigator=None,
+    ),
+    f"{constants.MARKETPLACE_MENU}.2": MenuFunctions(
+        executor=lambda: print_success("TODO: Add security to a portfolio."),
         navigator=None,
     ),
-
-    # Examples for future features (leave commented until implemented):
-    # f"{constants.MAIN_MENU}.1": MenuFunctions(executor=None, navigator=lambda: constants.MANAGE_USERS_MENU),
-    # f"{constants.MAIN_MENU}.2": MenuFunctions(executor=None, navigator=lambda: constants.MANAGE_PORTFOLIOS_MENU),
-    # f"{constants.MAIN_MENU}.3": MenuFunctions(executor=None, navigator=lambda: constants.MARKETPLACE_MENU),
 }
+
 
     
