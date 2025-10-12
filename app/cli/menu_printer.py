@@ -45,7 +45,17 @@ _menus: Dict[int, str] = {
 2. Add security to a portfolio (Buy)
 0. Back
 """
+,
+    constants.MANAGE_PORTFOLIOS_MENU: """[bold]Manage Portfolios[/bold]
+----
+1. View portfolios
+2. Create new portfolio
+3. Delete portfolio
+4. Sell securities
+0. Back
+""",
 }
+
 
 # ------------------------------------------------
 # UI helpers (kept minimal; pure presentation only)
@@ -229,6 +239,92 @@ def delete_user_executor() -> None:
         print_success(f"User '{username}' deleted.")
     except Exception as e:
         print_error(str(e))
+        
+def view_portfolios_executor() -> None:
+    """
+    Show all portfolios owned by the current user with total value and simple holdings view.
+    """
+    if not db.current_user:
+        print_error("Please login.")
+        return
+    rows = db.list_portfolios(owner_username=db.current_user.username)
+    if not rows:
+        print_error("You have no portfolios yet.")
+        return
+
+    table = Table(title="Your Portfolios")
+    table.add_column("ID", justify="right")
+    table.add_column("Name", justify="left")
+    table.add_column("Total Value", justify="right")
+    table.add_column("Holdings (ticker:qty)", justify="left")
+
+    for p in rows:
+        total = db.portfolio_total_value(p)
+        holdings = p["holdings"]  # type: ignore[index]
+        summary = ", ".join(f"{t}:{q}" for t, q in holdings.items()) if holdings else "-"
+        table.add_row(str(p["id"]), str(p["name"]), f"{total:.2f}", summary)
+
+    _console.print(table)
+
+
+def create_portfolio_executor() -> None:
+    """Prompt for fields and create a new portfolio for the current user."""
+    if not db.current_user:
+        print_error("Please login.")
+        return
+    name = _console.input("Name: ").strip()
+    description = _console.input("Description: ").strip()
+    strategy = _console.input("Strategy: ").strip()
+    try:
+        p = db.create_portfolio(
+            owner_username=db.current_user.username,
+            name=name, description=description, strategy=strategy
+        )
+        print_success(f"Created portfolio #{p['id']} ({p['name']}).")
+    except Exception as e:
+        print_error(str(e))
+
+
+def delete_portfolio_executor() -> None:
+    """Prompt for a portfolio id and delete it if owned by the user."""
+    if not db.current_user:
+        print_error("Please login.")
+        return
+    pid = _ask_int("Portfolio ID to delete: ")
+    try:
+        db.delete_portfolio(pid, requesting_user=db.current_user)
+        print_success(f"Deleted portfolio {pid}.")
+    except Exception as e:
+        print_error(str(e))
+
+
+def sell_security_executor() -> None:
+    """Prompt for portfolio id, ticker, quantity and execute a SELL."""
+    if not db.current_user:
+        print_error("Please login.")
+        return
+
+    # Helpful table of portfolios
+    portfolios = db.list_portfolios(owner_username=db.current_user.username)
+    if portfolios:
+        t = Table(show_header=True, header_style="bold")
+        t.add_column("ID", justify="right"); t.add_column("Name", justify="left")
+        for p in portfolios:
+            t.add_row(str(p["id"]), str(p["name"]))
+        _console.print(t)
+
+    pid = _ask_int("Portfolio ID: ")
+    ticker = _console.input("Ticker: ").strip().upper()
+    qty = _ask_positive_float("Quantity: ")
+    try:
+        result = db.sell_security(portfolio_id=pid, ticker=ticker, quantity=qty, price=None)
+        print_success(
+            f"Sold {result['quantity']} {result['ticker']} @ {result['price']:.2f} "
+            f"(proceeds {result['proceeds']:.2f}). New balance: {result['balance_after']:.2f}"
+        )
+    except Exception as e:
+        print_error(str(e))
+
 
 
 
@@ -259,6 +355,10 @@ def handle_user_selection(menu_id: int, user_selection: int) -> None:
         # Marketplace: 0 = Back (return to Main Menu)
     if menu_id == constants.MARKETPLACE_MENU and user_selection == 0:
         return print_menu(constants.MAIN_MENU)
+    
+    if menu_id == constants.MANAGE_PORTFOLIOS_MENU and user_selection == 0:
+        return print_menu(constants.MAIN_MENU)
+
 
 
     # Build router key and resolve target action
@@ -307,21 +407,38 @@ _router: Dict[str, MenuFunctions] = {
         navigator=_to_manage_users_menu_guarded,
     ),
 
-    f"{constants.MAIN_MENU}.2": MenuFunctions(executor=None, navigator=lambda: constants.MANAGE_PORTFOLIOS_MENU),
+    f"{constants.MAIN_MENU}.2": MenuFunctions(
+    executor=None, navigator=lambda: constants.MANAGE_PORTFOLIOS_MENU
+    ),
 
     # NEW: Main Menu option 3 navigates to Marketplace menu
     f"{constants.MAIN_MENU}.3": MenuFunctions(executor=None, navigator=lambda: constants.MARKETPLACE_MENU),
 
-    # Placeholder: Future Marketplace actions
+    # Manage Portfolios actions (return back to the same menu after action)
+    f"{constants.MANAGE_PORTFOLIOS_MENU}.1": MenuFunctions(
+        executor=view_portfolios_executor, navigator=lambda: constants.MANAGE_PORTFOLIOS_MENU
+    ),
+    f"{constants.MANAGE_PORTFOLIOS_MENU}.2": MenuFunctions(
+        executor=create_portfolio_executor, navigator=lambda: constants.MANAGE_PORTFOLIOS_MENU
+    ),
+    f"{constants.MANAGE_PORTFOLIOS_MENU}.3": MenuFunctions(
+        executor=delete_portfolio_executor, navigator=lambda: constants.MANAGE_PORTFOLIOS_MENU
+    ),
+    f"{constants.MANAGE_PORTFOLIOS_MENU}.4": MenuFunctions(
+        executor=sell_security_executor, navigator=lambda: constants.MANAGE_PORTFOLIOS_MENU
+    ),
+
+    # Marketplace: after action, stay in Marketplace
     f"{constants.MARKETPLACE_MENU}.1": MenuFunctions(
-    executor=view_securities_executor,
-    navigator=None,
+        executor=view_securities_executor,
+        navigator=lambda: constants.MARKETPLACE_MENU,   # ← NEW
     ),
-    # Marketplace: 2 = buy security
+    
     f"{constants.MARKETPLACE_MENU}.2": MenuFunctions(
-    executor=buy_security_executor,
-    navigator=None,
+        executor=buy_security_executor,
+        navigator=lambda: constants.MARKETPLACE_MENU,   # ← NEW
     ),
+
     # Manage Users actions (after action, return to Manage Users menu)
     f"{constants.MANAGE_USERS_MENU}.1": MenuFunctions(
         executor=view_users_executor,

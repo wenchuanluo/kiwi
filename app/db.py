@@ -70,6 +70,110 @@ def list_portfolios(owner_username: Optional[str] = None) -> List[Dict[str, obje
         if owner_username is None or p["owner_username"] == owner_username:
             rows.append(p)
     return rows
+# ---------- Portfolio helpers: list/get/value/create/delete/sell ----------
+
+def list_portfolios(owner_username: Optional[str] = None) -> List[Dict[str, object]]:
+    """
+    Return all portfolios or only those belonging to a specific user.
+    """
+    rows: List[Dict[str, object]] = []
+    for p in _portfolios.values():
+        if owner_username is None or p["owner_username"] == owner_username:
+            rows.append(p)
+    return rows
+
+def get_portfolio(portfolio_id: int) -> Optional[Dict[str, object]]:
+    """Return a portfolio dict or None."""
+    return _portfolios.get(portfolio_id)
+
+def portfolio_total_value(portfolio: Dict[str, object]) -> float:
+    """
+    Compute total value using reference prices.
+    """
+    holdings: Dict[str, float] = portfolio["holdings"]  # type: ignore[assignment]
+    total = 0.0
+    for ticker, qty in holdings.items():
+        sec = get_security(ticker)
+        if sec:
+            total += float(qty) * float(sec["reference_price"])
+    return total
+
+def create_portfolio(owner_username: str, name: str, description: str, strategy: str) -> Dict[str, object]:
+    """
+    Create a new portfolio for the owner. Returns the created portfolio dict.
+    """
+    global _next_portfolio_id
+    if not owner_username or not name:
+        raise ValueError("Owner username and portfolio name are required.")
+
+    new_id = _next_portfolio_id
+    _next_portfolio_id += 1
+
+    p = {
+        "id": new_id,
+        "owner_username": owner_username,
+        "name": name,
+        "description": description,
+        "strategy": strategy,
+        "holdings": {},
+    }
+    _portfolios[new_id] = p
+    return p
+
+def delete_portfolio(portfolio_id: int, requesting_user: Optional["User"] = None) -> None:
+    """
+    Delete a portfolio by id. Only the owner can delete it.
+    """
+    p = _portfolios.get(portfolio_id)
+    if not p:
+        raise ValueError(f"Portfolio ID {portfolio_id} does not exist.")
+    if requesting_user and p["owner_username"] != requesting_user.username:
+        raise ValueError("You do not own this portfolio.")
+    del _portfolios[portfolio_id]
+
+def sell_security(portfolio_id: int, ticker: str, quantity: float, price: Optional[float] = None) -> Dict[str, object]:
+    """
+    Execute a SELL; validates ownership and holdings; credits user balance.
+    Returns a summary dict.
+    """
+    if current_user is None:
+        raise ValueError("No active session. Please login.")
+
+    portfolio = get_portfolio(portfolio_id)
+    if not portfolio:
+        raise ValueError(f"Portfolio ID {portfolio_id} does not exist.")
+    if portfolio["owner_username"] != current_user.username:
+        raise ValueError("You do not own this portfolio.")
+
+    ticker = ticker.upper().strip()
+    if quantity <= 0:
+        raise ValueError("Quantity must be greater than 0.")
+
+    holdings: Dict[str, float] = portfolio["holdings"]  # type: ignore[assignment]
+    current_qty = float(holdings.get(ticker, 0.0))
+    if current_qty < quantity:
+        raise ValueError(f"Insufficient holdings. You have {current_qty} {ticker}.")
+
+    trade_price = float(price) if price is not None else get_market_price(ticker)
+    proceeds = trade_price * float(quantity)
+
+    current_user.balance += proceeds
+
+    new_qty = current_qty - float(quantity)
+    if new_qty > 0:
+        holdings[ticker] = new_qty
+    else:
+        holdings.pop(ticker, None)
+
+    return {
+        "portfolio_id": portfolio_id,
+        "ticker": ticker,
+        "quantity": float(quantity),
+        "price": trade_price,
+        "proceeds": proceeds,
+        "balance_after": current_user.balance,
+    }
+
 
 def get_portfolio(portfolio_id: int) -> Optional[Dict[str, object]]:
     """
