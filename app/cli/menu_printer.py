@@ -6,6 +6,7 @@ from domain.MenuFunctions import MenuFunctions
 import db
 import sys
 from rich.table import Table
+from domain.User import User
 
 _console = Console()
 
@@ -56,6 +57,16 @@ def print_error(message: str) -> None:
 def print_success(message: str) -> None:
     """Print a success message in a consistent style."""
     _console.print(f"[bold green]{message}[/bold green]")
+
+def _to_manage_users_menu_guarded() -> int:
+    """
+    Only admins can enter Manage Users menu.
+    If current user is not admin, show an error and stay on Main Menu.
+    """
+    if not db.current_user or db.current_user.role != "admin":
+        print_error("Only admins can manage users.")
+        return constants.MAIN_MENU
+    return constants.MANAGE_USERS_MENU
 
 # ----------------------------------------------------
 # (A) Gather login inputs (with hidden password input)
@@ -156,6 +167,70 @@ def buy_security_executor() -> None:
         )
     except Exception as e:
         print_error(str(e))
+    
+def view_users_executor() -> None:
+    """Print a table of all users (username, first, last, role, balance)."""
+    rows = db.list_users()
+    if not rows:
+        print_error("No users found.")
+        return
+
+    table = Table(title="All Users")
+    table.add_column("Username", justify="left")
+    table.add_column("First name", justify="left")
+    table.add_column("Last name", justify="left")
+    table.add_column("Role", justify="left")
+    table.add_column("Balance", justify="right")
+
+    for u in rows:
+        table.add_row(u.username, u.firstname, u.lastname, u.role, f"{u.balance:.2f}")
+
+    _console.print(table)
+
+
+def create_user_executor() -> None:
+    """
+    Prompt for details and create a new user.
+    Required: unique username, non-empty password, role in {admin,user}, balance >= 0.
+    """
+    username = _console.input("Username: ").strip()
+    password = _console.input("Password: ").strip()
+    first = _console.input("First name: ").strip()
+    last  = _console.input("Last name: ").strip()
+    role  = _console.input("Role (admin/user): ").strip().lower()
+
+    # numeric & non-negative balance
+    while True:
+        bal_str = _console.input("Initial balance: ").strip()
+        try:
+            balance = float(bal_str)
+            if balance < 0:
+                raise ValueError
+            break
+        except ValueError:
+            print_error("Balance must be a non-negative number.")
+
+    try:
+        user = User(username, password, first, last, balance, role=role)
+        db.create_new_user(user)
+        print_success(f"User '{username}' created.")
+    except Exception as e:
+        print_error(str(e))
+
+
+def delete_user_executor() -> None:
+    """
+    Prompt for username and delete if allowed.
+    Protections: cannot delete self, cannot delete last admin.
+    """
+    username = _console.input("Username to delete: ").strip()
+    try:
+        db.delete_user(username, requester=db.current_user)
+        print_success(f"User '{username}' deleted.")
+    except Exception as e:
+        print_error(str(e))
+
+
 
 
 # ----------------------------------------------------
@@ -227,7 +302,11 @@ _router: Dict[str, MenuFunctions] = {
     f"{constants.LOGIN_MENU}.1": MenuFunctions(executor=login, navigator=None),
 
     # Main Menu navigations
-    f"{constants.MAIN_MENU}.1": MenuFunctions(executor=None, navigator=lambda: constants.MANAGE_USERS_MENU),
+    f"{constants.MAIN_MENU}.1": MenuFunctions(
+        executor=None,
+        navigator=_to_manage_users_menu_guarded,
+    ),
+
     f"{constants.MAIN_MENU}.2": MenuFunctions(executor=None, navigator=lambda: constants.MANAGE_PORTFOLIOS_MENU),
 
     # NEW: Main Menu option 3 navigates to Marketplace menu
@@ -243,6 +322,11 @@ _router: Dict[str, MenuFunctions] = {
     executor=buy_security_executor,
     navigator=None,
     ),
+    f"{constants.MANAGE_USERS_MENU}.1": MenuFunctions(executor=view_users_executor, navigator=None),
+    f"{constants.MANAGE_USERS_MENU}.2": MenuFunctions(executor=create_user_executor, navigator=None),
+    f"{constants.MANAGE_USERS_MENU}.3": MenuFunctions(executor=delete_user_executor, navigator=None),
+
+
 }
 
 

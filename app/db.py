@@ -87,29 +87,67 @@ def get_market_price(ticker: str) -> float:
     return float(sec["reference_price"])
 
 
+# Seed admin (role=admin)
 _user: Dict[str, User] = {
-    "admin": User("admin", "adminpass", "Admin Firstname", "Admin Lastname", 100000.0)
+    "admin": User("admin", "adminpass", "Admin Firstname", "Admin Lastname", 100000.0, role="admin")
 }
 
-# NEW: current logged-in use
 current_user: Optional[User] = None
 
-def query_user(username: str) -> User|None:
-    try:
-        return _user[username]
-    except KeyError as ke:
-        return None
+def query_user(username: str) -> Optional[User]:
+    return _user.get(username)
 
-def query_all_users() -> list[User]:
+def query_all_users() -> List[User]:
     return list(_user.values())
 
-    # CHANGED:     # check if user already exists otherwise add to db
+def list_users() -> List[User]:
+    """Alias used by CLI to print a table."""
+    return query_all_users()
 
+def _count_admins() -> int:
+    return sum(1 for u in _user.values() if u.role == "admin")
+
+def create_new_user(user: User) -> None:
+    """
+    Create user with validations:
+    - non-empty username
+    - unique username
+    - password required
+    - role must be 'admin' or 'user'
+    - balance must be >= 0
+    """
+    if not user.username:
+        raise ValueError("Username is required.")
     if user.username in _user:
         raise ValueError(f"Username '{user.username}' already exists.")
+    if not user.password:
+        raise ValueError("Password is required.")
+    if user.role not in ("admin", "user"):
+        raise ValueError("Role must be 'admin' or 'user'.")
+    if user.balance < 0:
+        raise ValueError("Balance must be non-negative.")
+
     _user[user.username] = user
 
-# NEW: successfully, return user, otherwise raise exception
+def delete_user(username: str, *, requester: Optional[User] = None) -> None:
+    """
+    Delete a user with protections:
+    - must exist
+    - cannot delete self
+    - cannot delete the last remaining admin
+    """
+    target = _user.get(username)
+    if not target:
+        raise ValueError(f"User '{username}' does not exist.")
+
+    if requester and requester.username == username:
+        raise ValueError("You cannot delete your own account.")
+
+    if target.role == "admin" and _count_admins() <= 1:
+        raise ValueError("Cannot delete the last remaining admin.")
+
+    del _user[username]
+
 def login(username: str, password: str) -> User:
     user = _user.get(username)
     if not user or user.password != password:
