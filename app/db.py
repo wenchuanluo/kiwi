@@ -1,4 +1,5 @@
 from domain.User import User
+from datetime import datetime
 from typing import Dict, List, Optional   # CHANGED: 加 Optional
 
 # --- Seed securities catalog (mock database) ---------------------------------
@@ -8,6 +9,43 @@ _securities: Dict[str, Dict[str, float | str]] = {
     "MSFT": {"name": "Microsoft Corp.",  "reference_price": 420.00},
     "GOOGL": {"name": "Alphabet Inc.",   "reference_price": 155.00},
 }
+
+# -------------------------------
+# Transactions (simple log store)
+# -------------------------------
+_transactions: List[Dict[str, object]] = []
+_next_txn_id: int = 1
+
+def _log_transaction(*, ttype: str, username: str, portfolio_id: int,
+                     ticker: str, quantity: float, price: float, amount: float,
+                     balance_after: float) -> Dict[str, object]:
+    """
+    Append a transaction record and return it.
+    We keep a simple dict structure for the CLI.
+    """
+    global _next_txn_id
+    row = {
+        "id": _next_txn_id,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "type": ttype,  # "BUY" or "SELL"
+        "username": username,
+        "portfolio_id": portfolio_id,
+        "ticker": ticker,
+        "quantity": float(quantity),
+        "price": float(price),
+        "amount": float(amount),             # BUY cost / SELL proceeds
+        "balance_after": float(balance_after),
+    }
+    _transactions.append(row)
+    _next_txn_id += 1
+    return row
+
+def list_transactions(username: Optional[str] = None) -> List[Dict[str, object]]:
+    """Return all transactions or only those of a given username."""
+    if username is None:
+        return list(_transactions)
+    return [t for t in _transactions if t["username"] == username]
+
 # -------------------------------
 # Seed portfolios (mock database)
 # -------------------------------
@@ -164,6 +202,18 @@ def sell_security(portfolio_id: int, ticker: str, quantity: float, price: Option
         holdings[ticker] = new_qty
     else:
         holdings.pop(ticker, None)
+    
+    _log_transaction(
+    ttype="SELL",
+    username=current_user.username,
+    portfolio_id=portfolio_id,
+    ticker=ticker,
+    quantity=float(quantity),
+    price=trade_price,
+    amount=proceeds,  # SELL proceeds
+    balance_after=current_user.balance,
+    )
+
 
     return {
         "portfolio_id": portfolio_id,
@@ -299,6 +349,18 @@ def buy_security(portfolio_id: int, ticker: str, quantity: float, price: Optiona
     # Update holdings
     holdings: Dict[str, float] = portfolio["holdings"]  # type: ignore[assignment]
     holdings[ticker] = float(holdings.get(ticker, 0.0) + float(quantity))
+    
+    _log_transaction(
+    ttype="BUY",
+    username=current_user.username,
+    portfolio_id=portfolio_id,
+    ticker=ticker,
+    quantity=float(quantity),
+    price=trade_price,
+    amount=cost,  # BUY cost
+    balance_after=current_user.balance,
+    )
+
 
     return {
         "portfolio_id": portfolio_id,
@@ -307,4 +369,4 @@ def buy_security(portfolio_id: int, ticker: str, quantity: float, price: Optiona
         "price": trade_price,
         "cost": cost,
         "balance_after": current_user.balance,
-    }
+}

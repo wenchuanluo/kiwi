@@ -7,6 +7,9 @@ import db
 import sys
 from rich.table import Table
 from domain.User import User
+from rich import box
+import shutil
+
 
 _console = Console()
 
@@ -27,6 +30,7 @@ _menus: Dict[int, str] = {
 1. Manage Users
 2. Manage portfolios
 3. Marketplace
+4. Review transactions
 0. Logout
 """,
 
@@ -77,6 +81,18 @@ def _to_manage_users_menu_guarded() -> int:
         print_error("Only admins can manage users.")
         return constants.MAIN_MENU
     return constants.MANAGE_USERS_MENU
+
+def _mk_table(title: str) -> Table:
+    # Determine terminal width
+    return Table(
+        title=title,
+        expand=True,           # 
+        box=box.SIMPLE_HEAVY,  # 
+        pad_edge=False,        # 
+        show_header=True,
+        header_style="bold"
+    )
+
 
 # ----------------------------------------------------
 # (A) Gather login inputs (with hidden password input)
@@ -327,6 +343,47 @@ def sell_security_executor() -> None:
 
 
 
+def review_transactions_executor() -> None:
+    """
+    Print the current user's transactions in a table.
+    """
+    if not db.current_user:
+        print_error("Please login.")
+        return
+
+    rows = db.list_transactions(username=db.current_user.username)
+    if not rows:
+        print_error("No transactions found.")
+        return
+
+    table = Table(title=f"Transactions for {db.current_user.username}")
+    table.add_column("ID", justify="right")
+    table.add_column("Time", justify="left")
+    table.add_column("Type", justify="left")
+    table.add_column("Portfolio", justify="right")
+    table.add_column("Ticker", justify="left")
+    table.add_column("Qty", justify="right")
+    table.add_column("Price", justify="right")
+    table.add_column("Amount", justify="right")
+    table.add_column("Balance After", justify="right")
+
+    for r in rows:
+        table.add_row(
+            str(r["id"]),
+            str(r["timestamp"]),
+            str(r["type"]),
+            str(r["portfolio_id"]),
+            str(r["ticker"]),
+            f'{float(r["quantity"]):.2f}',
+            f'{float(r["price"]):.2f}',
+            f'{float(r["amount"]):.2f}',
+            f'{float(r["balance_after"]):.2f}',
+        )
+
+    _console.print(table)
+
+
+
 
 
 # ----------------------------------------------------
@@ -413,6 +470,12 @@ _router: Dict[str, MenuFunctions] = {
 
     # NEW: Main Menu option 3 navigates to Marketplace menu
     f"{constants.MAIN_MENU}.3": MenuFunctions(executor=None, navigator=lambda: constants.MARKETPLACE_MENU),
+
+    # Main Menu: 4 = Review transactions (print table then return to Main)
+    f"{constants.MAIN_MENU}.4": MenuFunctions(
+        executor=review_transactions_executor,
+        navigator=lambda: constants.MAIN_MENU,
+    ),
 
     # Manage Portfolios actions (return back to the same menu after action)
     f"{constants.MANAGE_PORTFOLIOS_MENU}.1": MenuFunctions(
