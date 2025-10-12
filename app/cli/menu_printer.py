@@ -235,13 +235,13 @@ _router: Dict[str, MenuFunctions] = {
 
     # Placeholder: Future Marketplace actions
     f"{constants.MARKETPLACE_MENU}.1": MenuFunctions(
-    executor=view_securities_executor,
-    navigator=None,
+        executor=view_securities_executor,
+        navigator=lambda: constants.MARKETPLACE_MENU,
     ),
     # Marketplace: 2 = buy security
     f"{constants.MARKETPLACE_MENU}.2": MenuFunctions(
-    executor=buy_security_executor,
-    navigator=None,
+        executor=buy_security_executor,
+        navigator=lambda: constants.MARKETPLACE_MENU,
     ),
 }
 
