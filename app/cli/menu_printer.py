@@ -322,11 +322,19 @@ _router: Dict[str, MenuFunctions] = {
     executor=buy_security_executor,
     navigator=None,
     ),
-    f"{constants.MANAGE_USERS_MENU}.1": MenuFunctions(executor=view_users_executor, navigator=None),
-    f"{constants.MANAGE_USERS_MENU}.2": MenuFunctions(executor=create_user_executor, navigator=None),
-    f"{constants.MANAGE_USERS_MENU}.3": MenuFunctions(executor=delete_user_executor, navigator=None),
-
-
+    # Manage Users actions (after action, return to Manage Users menu)
+    f"{constants.MANAGE_USERS_MENU}.1": MenuFunctions(
+        executor=view_users_executor,
+        navigator=lambda: constants.MANAGE_USERS_MENU,  # ← NEW
+    ),
+    f"{constants.MANAGE_USERS_MENU}.2": MenuFunctions(
+        executor=create_user_executor,
+        navigator=lambda: constants.MANAGE_USERS_MENU,  # ← NEW
+    ),
+    f"{constants.MANAGE_USERS_MENU}.3": MenuFunctions(
+        executor=delete_user_executor,
+        navigator=lambda: constants.MANAGE_USERS_MENU,  # ← NEW
+    ),
 }
 
 
