@@ -3,8 +3,13 @@ from typing import Dict, Tuple, Optional
 from rich.console import Console
 from cli import constants
 from domain.MenuFunctions import MenuFunctions
-import db
-import sys
+import os, sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))  # add /app to sys.path
+# from ... import db  <-- remove this line if present
+from service import login_service as auth
+from service import user_service, portfolio_service, security_service
+from domain.User import User
+from rich.table import Table
 from rich.table import Table
 from domain.User import User
 from rich import box
@@ -77,10 +82,12 @@ def _to_manage_users_menu_guarded() -> int:
     Only admins can enter Manage Users menu.
     If current user is not admin, show an error and stay on Main Menu.
     """
-    if not db.current_user or db.current_user.role != "admin":
+    u = auth.get_current_user()
+    if not u or u.role != "admin":
         print_error("Only admins can manage users.")
         return constants.MAIN_MENU
     return constants.MANAGE_USERS_MENU
+
 
 def _mk_table(title: str) -> Table:
     # Determine terminal width
@@ -120,37 +127,54 @@ def _ask_int(prompt: str) -> int:
 # (C) Login executor: set session and navigate to main menu
 # --------------------------------------------------------
 def login() -> None:
-    """Authenticate user; on success set session and go to main menu."""
     username, password = get_login_inputs()
-    # Use db.login to validate; it raises ValueError on failure
-    user = db.login(username, password)
-    db.current_user = user  # record session (simple in-memory session)
+    user = auth.login(username, password)
+    auth.set_current_user(user)
     print_success(f"Welcome, {user.firstname}!")
     print_menu(constants.MAIN_MENU)
+
     
 def view_securities_executor() -> None:
-    """
-    Executor for Marketplace -> 'View securities'.
-    Prints a simple table: ticker, name, reference price.
-    """
-    rows = db.list_securities()
+    """Print ticker, name, reference price."""
+    rows = security_service.list_securities()
     if not rows:
         print_error("No securities available.")
         return
-
     table = Table(title="Available Securities")
-    table.add_column("Ticker", justify="left")
-    table.add_column("Name", justify="left")
-    table.add_column("Reference Price", justify="right")
-
+    table.add_column("Ticker"); table.add_column("Name"); table.add_column("Reference Price", justify="right")
     for r in rows:
-        table.add_row(
-            str(r["ticker"]),
-            str(r["name"]),
-            f'{float(r["reference_price"]):.2f}'
-        )
-
+        table.add_row(str(r["ticker"]), str(r["name"]), f'{float(r["reference_price"]):.2f}')
     _console.print(table)
+
+
+def buy_security_executor() -> None:
+    """Buy a security into a portfolio."""
+    u = auth.get_current_user()
+    if not u:
+        print_error("Please login.")
+        return
+
+    # show user's portfolios
+    portfolios = portfolio_service.list_portfolios(owner_username=u.username)
+    if portfolios:
+        t = Table(show_header=True, header_style="bold"); t.add_column("ID", justify="right"); t.add_column("Name")
+        for p in portfolios: t.add_row(str(p["id"]), str(p["name"]))
+        _console.print(t)
+
+    pid = _ask_int("Portfolio ID: ")
+    ticker = _console.input("Ticker: ").strip().upper()
+    qty = _ask_positive_float("Quantity: ")
+    try:
+        result = security_service.buy_security(portfolio_id=pid, ticker=ticker, quantity=qty, price=None)
+        print_success(
+            f"Bought {result['quantity']} {result['ticker']} @ {result['price']:.2f} "
+            f"(cost {result['cost']:.2f}). New balance: {result['balance_after']:.2f}"
+        )
+    except Exception as e:
+        print_error(str(e))
+
+        
+        
 def _ask_positive_float(prompt: str) -> float:
     """Ask until a positive float is provided."""
     while True:
@@ -162,178 +186,112 @@ def _ask_positive_float(prompt: str) -> float:
             return val
         except ValueError:
             print_error("Please enter a positive number (e.g., 1 or 2.5).")
-
-def buy_security_executor() -> None:
-    """
-    Executor for Marketplace -> 'Add security to a portfolio (Buy)'.
-    Prompts: Portfolio ID, Ticker, Quantity.
-    Uses reference price by default.
-    """
-    # Show user's portfolios (short summary) to help choose an ID
-    if db.current_user:
-        portfolios = db.list_portfolios(owner_username=db.current_user.username)
-        if portfolios:
-            _console.print("[bold]Your portfolios:[/bold]")
-            t = Table(show_header=True, header_style="bold")
-            t.add_column("ID", justify="right")
-            t.add_column("Name", justify="left")
-            for p in portfolios:
-                t.add_row(str(p["id"]), str(p["name"]))
-            _console.print(t)
-
-    pid = _ask_int("Portfolio ID: ")
-    ticker = _console.input("Ticker: ").strip().upper()
-    qty = _ask_positive_float("Quantity: ")
-
-    try:
-        result = db.buy_security(portfolio_id=pid, ticker=ticker, quantity=qty, price=None)
-        print_success(
-            f"Bought {result['quantity']} {result['ticker']} @ {result['price']:.2f} "
-            f"(cost {result['cost']:.2f}). New balance: {result['balance_after']:.2f}"
-        )
-    except Exception as e:
-        print_error(str(e))
     
 def view_users_executor() -> None:
-    """Print a table of all users (username, first, last, role, balance)."""
-    rows = db.list_users()
+    rows = user_service.list_users()
     if not rows:
-        print_error("No users found.")
-        return
-
+        print_error("No users found."); return
     table = Table(title="All Users")
-    table.add_column("Username", justify="left")
-    table.add_column("First name", justify="left")
-    table.add_column("Last name", justify="left")
-    table.add_column("Role", justify="left")
-    table.add_column("Balance", justify="right")
-
+    for col in ("Username","First name","Last name","Role","Balance"):
+        table.add_column(col, justify="left" if col!="Balance" else "right")
     for u in rows:
         table.add_row(u.username, u.firstname, u.lastname, u.role, f"{u.balance:.2f}")
-
     _console.print(table)
 
 
 def create_user_executor() -> None:
-    """
-    Prompt for details and create a new user.
-    Required: unique username, non-empty password, role in {admin,user}, balance >= 0.
-    """
     username = _console.input("Username: ").strip()
     password = _console.input("Password: ").strip()
-    first = _console.input("First name: ").strip()
-    last  = _console.input("Last name: ").strip()
-    role  = _console.input("Role (admin/user): ").strip().lower()
-
-    # numeric & non-negative balance
+    first    = _console.input("First name: ").strip()
+    last     = _console.input("Last name: ").strip()
+    role     = _console.input("Role (admin/user): ").strip().lower()
+    # balance (non-negative)
     while True:
         bal_str = _console.input("Initial balance: ").strip()
         try:
-            balance = float(bal_str)
-            if balance < 0:
-                raise ValueError
+            balance = float(bal_str); 
+            if balance < 0: raise ValueError
             break
         except ValueError:
             print_error("Balance must be a non-negative number.")
-
     try:
         user = User(username, password, first, last, balance, role=role)
-        db.create_new_user(user)
+        user_service.create_user(user)
         print_success(f"User '{username}' created.")
     except Exception as e:
         print_error(str(e))
 
 
 def delete_user_executor() -> None:
-    """
-    Prompt for username and delete if allowed.
-    Protections: cannot delete self, cannot delete last admin.
-    """
     username = _console.input("Username to delete: ").strip()
     try:
-        db.delete_user(username, requester=db.current_user)
+        requester = auth.get_current_user()
+        user_service.delete_user(username, requester=requester)
         print_success(f"User '{username}' deleted.")
     except Exception as e:
         print_error(str(e))
+
         
 def view_portfolios_executor() -> None:
-    """
-    Show all portfolios owned by the current user with total value and simple holdings view.
-    """
-    if not db.current_user:
-        print_error("Please login.")
-        return
-    rows = db.list_portfolios(owner_username=db.current_user.username)
+    u = auth.get_current_user()
+    if not u:
+        print_error("Please login."); return
+    rows = portfolio_service.list_portfolios(owner_username=u.username)
     if not rows:
-        print_error("You have no portfolios yet.")
-        return
+        print_error("You have no portfolios yet."); return
 
     table = Table(title="Your Portfolios")
-    table.add_column("ID", justify="right")
-    table.add_column("Name", justify="left")
-    table.add_column("Total Value", justify="right")
-    table.add_column("Holdings (ticker:qty)", justify="left")
-
+    table.add_column("ID", justify="right"); table.add_column("Name")
+    table.add_column("Total Value", justify="right"); table.add_column("Holdings (ticker:qty)")
     for p in rows:
-        total = db.portfolio_total_value(p)
-        holdings = p["holdings"]  # type: ignore[index]
+        total = portfolio_service.portfolio_total_value(p)
+        holdings = p["holdings"]
         summary = ", ".join(f"{t}:{q}" for t, q in holdings.items()) if holdings else "-"
         table.add_row(str(p["id"]), str(p["name"]), f"{total:.2f}", summary)
-
     _console.print(table)
 
 
 def create_portfolio_executor() -> None:
-    """Prompt for fields and create a new portfolio for the current user."""
-    if not db.current_user:
-        print_error("Please login.")
-        return
+    u = auth.get_current_user()
+    if not u:
+        print_error("Please login."); return
     name = _console.input("Name: ").strip()
     description = _console.input("Description: ").strip()
     strategy = _console.input("Strategy: ").strip()
     try:
-        p = db.create_portfolio(
-            owner_username=db.current_user.username,
-            name=name, description=description, strategy=strategy
-        )
+        p = portfolio_service.create_portfolio(u.username, name, description, strategy)
         print_success(f"Created portfolio #{p['id']} ({p['name']}).")
     except Exception as e:
         print_error(str(e))
 
 
 def delete_portfolio_executor() -> None:
-    """Prompt for a portfolio id and delete it if owned by the user."""
-    if not db.current_user:
-        print_error("Please login.")
-        return
+    u = auth.get_current_user()
+    if not u:
+        print_error("Please login."); return
     pid = _ask_int("Portfolio ID to delete: ")
     try:
-        db.delete_portfolio(pid, requesting_user=db.current_user)
+        portfolio_service.delete_portfolio(pid, requesting_user=u)
         print_success(f"Deleted portfolio {pid}.")
     except Exception as e:
         print_error(str(e))
 
 
 def sell_security_executor() -> None:
-    """Prompt for portfolio id, ticker, quantity and execute a SELL."""
-    if not db.current_user:
-        print_error("Please login.")
-        return
-
-    # Helpful table of portfolios
-    portfolios = db.list_portfolios(owner_username=db.current_user.username)
+    u = auth.get_current_user()
+    if not u:
+        print_error("Please login."); return
+    portfolios = portfolio_service.list_portfolios(owner_username=u.username)
     if portfolios:
-        t = Table(show_header=True, header_style="bold")
-        t.add_column("ID", justify="right"); t.add_column("Name", justify="left")
-        for p in portfolios:
-            t.add_row(str(p["id"]), str(p["name"]))
+        t = Table(show_header=True, header_style="bold"); t.add_column("ID", justify="right"); t.add_column("Name")
+        for p in portfolios: t.add_row(str(p["id"]), str(p["name"]))
         _console.print(t)
 
     pid = _ask_int("Portfolio ID: ")
     ticker = _console.input("Ticker: ").strip().upper()
     qty = _ask_positive_float("Quantity: ")
     try:
-        result = db.sell_security(portfolio_id=pid, ticker=ticker, quantity=qty, price=None)
+        result = portfolio_service.sell_security(pid, ticker, qty, price=None)
         print_success(
             f"Sold {result['quantity']} {result['ticker']} @ {result['price']:.2f} "
             f"(proceeds {result['proceeds']:.2f}). New balance: {result['balance_after']:.2f}"
@@ -342,45 +300,41 @@ def sell_security_executor() -> None:
         print_error(str(e))
 
 
+# def review_transactions_executor() -> None:
+#     """
+#     Print the current user's transactions in a table.
+#     """
+#     if not auth.get_current_user():
+#         print_error("Please login.")
+#         return
+
+#     rows = db.list_transactions(username=auth.get_current_user().username)
+#     if not rows:
+#         print_error("No transactions found.")
+#         return
 
 def review_transactions_executor() -> None:
-    """
-    Print the current user's transactions in a table.
-    """
-    if not db.current_user:
-        print_error("Please login.")
-        return
-
-    rows = db.list_transactions(username=db.current_user.username)
+    u = auth.get_current_user()
+    if not u:
+        print_error("Please login."); return
+    rows = portfolio_service.list_transactions(username=u.username)
     if not rows:
-        print_error("No transactions found.")
-        return
+        print_error("No transactions found."); return
 
-    table = Table(title=f"Transactions for {db.current_user.username}")
-    table.add_column("ID", justify="right")
-    table.add_column("Time", justify="left")
-    table.add_column("Type", justify="left")
-    table.add_column("Portfolio", justify="right")
-    table.add_column("Ticker", justify="left")
-    table.add_column("Qty", justify="right")
-    table.add_column("Price", justify="right")
-    table.add_column("Amount", justify="right")
-    table.add_column("Balance After", justify="right")
-
+    table = Table(title=f"Transactions for {u.username}")
+    for col, just in [
+        ("ID","right"),("Time","left"),("Type","left"),("Portfolio","right"),
+        ("Ticker","left"),("Qty","right"),("Price","right"),("Amount","right"),("Balance After","right")
+    ]:
+        table.add_column(col, justify=just)
     for r in rows:
         table.add_row(
-            str(r["id"]),
-            str(r["timestamp"]),
-            str(r["type"]),
-            str(r["portfolio_id"]),
-            str(r["ticker"]),
-            f'{float(r["quantity"]):.2f}',
-            f'{float(r["price"]):.2f}',
-            f'{float(r["amount"]):.2f}',
-            f'{float(r["balance_after"]):.2f}',
+            str(r["id"]), str(r["timestamp"]), str(r["type"]), str(r["portfolio_id"]),
+            str(r["ticker"]), f'{float(r["quantity"]):.2f}', f'{float(r["price"]):.2f}',
+            f'{float(r["amount"]):.2f}', f'{float(r["balance_after"]):.2f}',
         )
-
     _console.print(table)
+
 
 
 

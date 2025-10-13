@@ -254,6 +254,10 @@ def query_user(username: str) -> Optional[User]:
 def query_all_users() -> List[User]:
     return list(_user.values())
 
+def list_securities() -> List[Dict[str, object]]:
+    return list(_securities.values())
+
+
 def list_users() -> List[User]:
     """Alias used by CLI to print a table."""
     return query_all_users()
