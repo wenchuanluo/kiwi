@@ -1,0 +1,5 @@
+# Project dependencies for the CLI app
+# Keep the list minimal; add new libs here when introduced.
+
+rich==14.1.0
+
