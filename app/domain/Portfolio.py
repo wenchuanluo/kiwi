@@ -1,30 +1,36 @@
 # app/domain/Portfolio.py
-from dataclasses import dataclass, field
-from typing import Dict
-
-@dataclass
+from typing import List
+from domain.Investment import Investment
 class Portfolio:
     """
-    Domain model for a portfolio (data only).
+    Represents a user's investment portfolio.
+    Contains multiple Investment objects in the holdings list.
     """
-    id: int
-    owner_username: str
-    name: str
-    description: str = ""
-    strategy: str = ""
-    holdings: Dict[str, float] = field(default_factory=dict)
 
-    def position(self, ticker: str) -> float:
-        return float(self.holdings.get(ticker.upper(), 0.0))
+    def __init__(self, id: int, name: str, description: str, owner_username: str):
+        self.id: int = id
+        self.name: str = name
+        self.description: str = description
+        self.owner_username: str = owner_username
+        self.holdings: List[Investment] = []  # ✅ list of Investment objects
 
-    def add(self, ticker: str, qty: float) -> None:
-        t = ticker.upper()
-        self.holdings[t] = self.position(t) + float(qty)
+    def add_investment(self, investment: Investment) -> None:
+        """Add new investment or update existing ticker quantity."""
+        for inv in self.holdings:
+            if inv.ticker == investment.ticker:
+                inv.update_quantity(investment.quantity)
+                return
+        self.holdings.append(investment)
 
-    def remove(self, ticker: str, qty: float) -> None:
-        t = ticker.upper()
-        new_qty = self.position(t) - float(qty)
-        if new_qty > 0:
-            self.holdings[t] = new_qty
-        else:
-            self.holdings.pop(t, None)
+    def remove_investment(self, ticker: str, quantity: float) -> bool:
+        """Reduce or remove investment; return True if successful."""
+        for inv in self.holdings:
+            if inv.ticker == ticker:
+                if inv.quantity < quantity:
+                    return False
+                inv.update_quantity(-quantity)
+                if inv.quantity == 0:
+                    self.holdings.remove(inv)
+                return True
+        return False
+

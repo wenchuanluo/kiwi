@@ -13,6 +13,7 @@ from rich.table import Table
 from rich.table import Table
 from domain.User import User
 from rich import box
+import db
 import shutil
 
 
@@ -129,21 +130,27 @@ def _ask_int(prompt: str) -> int:
 def login() -> None:
     username, password = get_login_inputs()
     user = auth.login(username, password)
-    auth.set_current_user(user)
-    print_success(f"Welcome, {user.firstname}!")
+    auth.set_current_user(user)  # 
+    import db
+    db.set_current_user(user)    # 
+
+    print_success(f"Welcome, {username}!")
     print_menu(constants.MAIN_MENU)
+
 
     
 def view_securities_executor() -> None:
-    """Print ticker, name, reference price."""
+    """Print ticker, Issuer, reference price."""
     rows = security_service.list_securities()
     if not rows:
         print_error("No securities available.")
         return
     table = Table(title="Available Securities")
-    table.add_column("Ticker"); table.add_column("Name"); table.add_column("Reference Price", justify="right")
+    table.add_column("Ticker"); table.add_column("Issuer"); table.add_column("Reference Price", justify="right")
     for r in rows:
-        table.add_row(str(r["ticker"]), str(r["name"]), f'{float(r["reference_price"]):.2f}')
+        # security_service.list_securities() returns rows with key 'issuer' (lowercase)
+        issuer = r.get("issuer") or r.get("Issuer") or ""
+        table.add_row(str(r["ticker"]), str(issuer), f'{float(r["reference_price"]):.2f}')
     _console.print(table)
 
 
@@ -187,16 +194,61 @@ def _ask_positive_float(prompt: str) -> float:
         except ValueError:
             print_error("Please enter a positive number (e.g., 1 or 2.5).")
     
+
+
+_console = Console()
+
 def view_users_executor() -> None:
-    rows = user_service.list_users()
+    """Print a table of all users (username, first, last, role, balance)."""
+    rows = db.list_users()
     if not rows:
-        print_error("No users found."); return
-    table = Table(title="All Users")
-    for col in ("Username","First name","Last name","Role","Balance"):
-        table.add_column(col, justify="left" if col!="Balance" else "right")
+        try:
+            print_error("No users found.")
+        except NameError:
+            _console.print("[bold red]No users found.[/bold red]")
+        return
+
+    term_width = _console.size.width
+    compact = term_width < 80  
+
+    table = Table(
+        title="[b]ALL Users[/b]",
+        box=box.SQUARE,          # 
+        show_edge=True,
+        border_style="cyan",
+        header_style="bold cyan",
+        pad_edge=True,
+        expand=False,            # 
+        row_styles=["none", "dim"],  # 
+        show_lines=False,
+    )
+
+    if compact:
+        
+        table.add_column("User",   justify="left",  no_wrap=True, min_width=8,  max_width=16, overflow="ellipsis")
+        table.add_column("First",  justify="left",  no_wrap=True, min_width=8,  max_width=16, overflow="ellipsis")
+        table.add_column("Last",   justify="left",  no_wrap=True, min_width=8,  max_width=16, overflow="ellipsis")
+        table.add_column("Role",   justify="center",no_wrap=True, min_width=5,  max_width=8,  overflow="ellipsis")
+        table.add_column("Balance",justify="right", no_wrap=True, min_width=10, max_width=14)
+    else:
+        
+        nbsp = "\u00A0"
+        table.add_column("Username",        justify="left",  no_wrap=True, min_width=12, max_width=20, overflow="ellipsis")
+        table.add_column(f"First{nbsp}name",justify="left",  no_wrap=True, min_width=12, max_width=20, overflow="ellipsis")
+        table.add_column(f"Last{nbsp}name", justify="left",  no_wrap=True, min_width=12, max_width=20, overflow="ellipsis")
+        table.add_column("Role",            justify="center",no_wrap=True, min_width=6,  max_width=10, overflow="ellipsis")
+        table.add_column("Balance",         justify="right", no_wrap=True, min_width=12, max_width=16)
+
     for u in rows:
-        table.add_row(u.username, u.firstname, u.lastname, u.role, f"{u.balance:.2f}")
+        table.add_row(
+            getattr(u, "username", ""),
+            getattr(u, "firstname", ""),
+            getattr(u, "lastname", ""),
+            getattr(u, "role", ""),
+            f"{getattr(u, 'balance', 0):,.2f}",   
+        )
     _console.print(table)
+
 
 
 def create_user_executor() -> None:
@@ -290,14 +342,21 @@ def sell_security_executor() -> None:
     pid = _ask_int("Portfolio ID: ")
     ticker = _console.input("Ticker: ").strip().upper()
     qty = _ask_positive_float("Quantity: ")
+
+    # user can ask price; if not, just use market price
+    price_text = _console.input("Sale price [blank = use market price]: ").strip()
+    price = float(price_text) if price_text else None
+
     try:
-        result = portfolio_service.sell_security(pid, ticker, qty, price=None)
+        result = portfolio_service.sell_security(pid, ticker, qty, price=price)  # import price
+        src = "(manual)" if price is not None else "(market)"
         print_success(
-            f"Sold {result['quantity']} {result['ticker']} @ {result['price']:.2f} "
+            f"Sold {result['quantity']} {result['ticker']} @ {result['price']:.2f} {src} "
             f"(proceeds {result['proceeds']:.2f}). New balance: {result['balance_after']:.2f}"
         )
     except Exception as e:
         print_error(str(e))
+
 
 
 # def review_transactions_executor() -> None:
@@ -320,19 +379,49 @@ def review_transactions_executor() -> None:
     rows = portfolio_service.list_transactions(username=u.username)
     if not rows:
         print_error("No transactions found."); return
+    # Use a wider table, prevent wrapping for key columns and right-align numbers
+    table = Table(
+        title=f"Transactions for {u.username}",
+        expand=True,
+        box=box.SIMPLE_HEAVY,
+        show_header=True,
+        header_style="bold",
+    )
 
-    table = Table(title=f"Transactions for {u.username}")
-    for col, just in [
-        ("ID","right"),("Time","left"),("Type","left"),("Portfolio","right"),
-        ("Ticker","left"),("Qty","right"),("Price","right"),("Amount","right"),("Balance After","right")
-    ]:
-        table.add_column(col, justify=just)
+    table.add_column("ID", justify="right", no_wrap=True, width=6)
+    table.add_column("Time", justify="left", no_wrap=True, min_width=19)
+    table.add_column("Type", justify="center", no_wrap=True, width=7)
+    table.add_column("Portfolio", justify="right", no_wrap=True, width=10)
+    table.add_column("Ticker", justify="left", no_wrap=True, width=8)
+    table.add_column("Qty", justify="right", no_wrap=True, min_width=8)
+    table.add_column("Price", justify="right", no_wrap=True, min_width=10)
+    table.add_column("Amount", justify="right", no_wrap=True, min_width=12)
+    table.add_column("Balance After", justify="right", no_wrap=True, min_width=14)
+
     for r in rows:
+        # Defensive access and consistent formatting
+        tid = str(r.get("id", ""))
+        ts = str(r.get("timestamp", ""))
+        ttype = str(r.get("type", ""))
+        pid = str(r.get("portfolio_id", ""))
+        ticker = str(r.get("ticker", ""))
+        qty = float(r.get("quantity", 0.0))
+        price = float(r.get("price", 0.0))
+        amount = float(r.get("amount", 0.0))
+        bal_after = float(r.get("balance_after", 0.0))
+
         table.add_row(
-            str(r["id"]), str(r["timestamp"]), str(r["type"]), str(r["portfolio_id"]),
-            str(r["ticker"]), f'{float(r["quantity"]):.2f}', f'{float(r["price"]):.2f}',
-            f'{float(r["amount"]):.2f}', f'{float(r["balance_after"]):.2f}',
+            tid,
+            ts,
+            ttype,
+            pid,
+            ticker,
+            f"{qty:,.2f}",
+            f"{price:,.2f}",
+            f"{amount:,.2f}",
+            f"{bal_after:,.2f}",
         )
+
     _console.print(table)
 
 
