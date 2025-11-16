@@ -1,5 +1,5 @@
 # app/cli/menu_printer.py
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Iterable
 from rich.console import Console
 from cli import constants
 from domain.MenuFunctions import MenuFunctions
@@ -46,6 +46,7 @@ _menus: Dict[int, str] = {
 1. View users
 2. Create new user
 3. Delete user
+4. View user's transactions  [admin]
 0. Back
 """,
  # NEW: Marketplace (accessible to all users)
@@ -139,19 +140,39 @@ def login() -> None:
 
 
     
-def view_securities_executor() -> None:
-    """Print ticker, Issuer, reference price."""
-    rows = security_service.list_securities()
-    if not rows:
-        print_error("No securities available.")
+def view_portfolios_executor() -> None:
+    user = db.get_current_user()
+    if not user:
+        print_error("No active session. Please login.")
         return
-    table = Table(title="Available Securities")
-    table.add_column("Ticker"); table.add_column("Issuer"); table.add_column("Reference Price", justify="right")
-    for r in rows:
-        # security_service.list_securities() returns rows with key 'issuer' (lowercase)
-        issuer = r.get("issuer") or r.get("Issuer") or ""
-        table.add_row(str(r["ticker"]), str(issuer), f'{float(r["reference_price"]):.2f}')
+
+    portfolios = db.list_portfolios(owner_username=user.username)
+    if not portfolios:
+        _console.print("[yellow]You have no portfolios yet.[/yellow]")
+        return
+
+    table = Table(
+        title="Your Portfolios",
+        box=box.SIMPLE_HEAVY,
+        show_header=True,
+        header_style="bold cyan",
+        expand=False,
+        pad_edge=False,
+    )
+    table.add_column("ID", justify="center", width=6, no_wrap=True)
+    table.add_column("Name", width=22)
+    table.add_column("Total Value", justify="right", width=14, no_wrap=True)
+    table.add_column("Holdings (ticker:qty)", width=40)
+
+    for p in portfolios:  # p is a Portfolio
+        holdings_str = "-" if not p.holdings else " | ".join(
+            f"{t}:{q:g}" for t, q in p.holdings.items()
+        )
+        total_val = db.portfolio_total_value(p)
+        table.add_row(str(p.id), p.name, f"{total_val:,.2f}", holdings_str)
+
     _console.print(table)
+
 
 
 def buy_security_executor() -> None:
@@ -161,24 +182,30 @@ def buy_security_executor() -> None:
         print_error("Please login.")
         return
 
-    # show user's portfolios
+    # show user's portfolios (Portfolio objects!)
     portfolios = portfolio_service.list_portfolios(owner_username=u.username)
     if portfolios:
-        t = Table(show_header=True, header_style="bold"); t.add_column("ID", justify="right"); t.add_column("Name")
-        for p in portfolios: t.add_row(str(p["id"]), str(p["name"]))
+        t = Table(show_header=True, header_style="bold")
+        t.add_column("ID", justify="right")
+        t.add_column("Name")
+        for p in portfolios:          # p is a Portfolio object
+            t.add_row(str(p.id), p.name)
         _console.print(t)
 
     pid = _ask_int("Portfolio ID: ")
     ticker = _console.input("Ticker: ").strip().upper()
     qty = _ask_positive_float("Quantity: ")
     try:
-        result = security_service.buy_security(portfolio_id=pid, ticker=ticker, quantity=qty, price=None)
+        result = security_service.buy_security(
+            portfolio_id=pid, ticker=ticker, quantity=qty, price=None
+        )
         print_success(
             f"Bought {result['quantity']} {result['ticker']} @ {result['price']:.2f} "
             f"(cost {result['cost']:.2f}). New balance: {result['balance_after']:.2f}"
         )
     except Exception as e:
         print_error(str(e))
+
 
         
         
@@ -284,49 +311,31 @@ def delete_user_executor() -> None:
         print_error(str(e))
 
         
-def view_portfolios_executor() -> None:
-    u = auth.get_current_user()
-    if not u:
-        print_error("Please login."); return
-    rows = portfolio_service.list_portfolios(owner_username=u.username)
-    if not rows:
-        print_error("You have no portfolios yet."); return
-
-    table = Table(title="Your Portfolios")
-    table.add_column("ID", justify="right"); table.add_column("Name")
-    table.add_column("Total Value", justify="right"); table.add_column("Holdings (ticker:qty)")
-    for p in rows:
-        total = portfolio_service.portfolio_total_value(p)
-        holdings = p["holdings"]
-        summary = ", ".join(f"{t}:{q}" for t, q in holdings.items()) if holdings else "-"
-        table.add_row(str(p["id"]), str(p["name"]), f"{total:.2f}", summary)
-    _console.print(table)
 
 
 def create_portfolio_executor() -> None:
-    u = auth.get_current_user()
+    u = db.get_current_user()
     if not u:
-        print_error("Please login."); return
+        raise Exception("No active session. Please login.")
+
     name = _console.input("Name: ").strip()
-    description = _console.input("Description: ").strip()
+    desc = _console.input("Description: ").strip()
     strategy = _console.input("Strategy: ").strip()
-    try:
-        p = portfolio_service.create_portfolio(u.username, name, description, strategy)
-        print_success(f"Created portfolio #{p['id']} ({p['name']}).")
-    except Exception as e:
-        print_error(str(e))
+
+    p = db.create_portfolio(u.username, name=name, description=desc, strategy=strategy)
+    print_success(f"Created portfolio #{p.id} - {p.name}")
+
 
 
 def delete_portfolio_executor() -> None:
-    u = auth.get_current_user()
+    u = db.get_current_user()
     if not u:
-        print_error("Please login."); return
-    pid = _ask_int("Portfolio ID to delete: ")
-    try:
-        portfolio_service.delete_portfolio(pid, requesting_user=u)
-        print_success(f"Deleted portfolio {pid}.")
-    except Exception as e:
-        print_error(str(e))
+        raise Exception("No active session. Please login.")
+
+    pid = int(_console.input("Portfolio ID: ").strip())
+    db.delete_portfolio(pid, requesting_user=u)
+    print_success(f"Deleted portfolio {pid}.")
+
 
 
 def sell_security_executor() -> None:
@@ -335,8 +344,11 @@ def sell_security_executor() -> None:
         print_error("Please login."); return
     portfolios = portfolio_service.list_portfolios(owner_username=u.username)
     if portfolios:
-        t = Table(show_header=True, header_style="bold"); t.add_column("ID", justify="right"); t.add_column("Name")
-        for p in portfolios: t.add_row(str(p["id"]), str(p["name"]))
+        t = Table(show_header=True, header_style="bold")
+        t.add_column("ID", justify="right")
+        t.add_column("Name")
+        for p in portfolios:            # p is a Portfolio object
+            t.add_row(str(p.id), p.name)
         _console.print(t)
 
     pid = _ask_int("Portfolio ID: ")
@@ -357,7 +369,32 @@ def sell_security_executor() -> None:
     except Exception as e:
         print_error(str(e))
 
+# --- Marketplace executors ---
+def view_securities_executor() -> None:
+    """Show available securities (ticker, issuer, reference price)."""
+    rows = db.list_securities()  # expects Dict[str, Dict[str, float|str]]
+    if not rows:
+        print_error("No securities available.")
+        return
 
+    table = Table(
+        title="Available Securities",
+        box=box.SQUARE,
+        show_header=True,
+        header_style="bold cyan",
+        expand=True,
+    )
+    table.add_column("Ticker", justify="center", no_wrap=True)
+    table.add_column("Issuer", justify="left")
+    table.add_column("Reference Price", justify="right", no_wrap=True)
+
+    # rows  {"AAPL": {"issuer": "...", "reference_price": 190.0}, ...}
+    for ticker, info in rows.items():
+        issuer = str(info.get("issuer", ""))
+        ref_px = float(info.get("reference_price", 0.0))
+        table.add_row(ticker, issuer, f"{ref_px:,.2f}")
+
+    _console.print(table)
 
 # def review_transactions_executor() -> None:
 #     """
@@ -375,19 +412,23 @@ def sell_security_executor() -> None:
 def review_transactions_executor() -> None:
     u = auth.get_current_user()
     if not u:
-        print_error("Please login."); return
+        print_error("Please login."); 
+        return
     rows = portfolio_service.list_transactions(username=u.username)
     if not rows:
-        print_error("No transactions found."); return
-    # Use a wider table, prevent wrapping for key columns and right-align numbers
+        print_error("No transactions found."); 
+        return
+    _render_transactions_table(rows, f"Transactions for {u.username}")
+
+
+def _render_transactions_table(rows: Iterable[dict], title: str) -> None:
     table = Table(
-        title=f"Transactions for {u.username}",
+        title=title,
         expand=True,
         box=box.SIMPLE_HEAVY,
         show_header=True,
         header_style="bold",
     )
-
     table.add_column("ID", justify="right", no_wrap=True, width=6)
     table.add_column("Time", justify="left", no_wrap=True, min_width=19)
     table.add_column("Type", justify="center", no_wrap=True, width=7)
@@ -399,31 +440,39 @@ def review_transactions_executor() -> None:
     table.add_column("Balance After", justify="right", no_wrap=True, min_width=14)
 
     for r in rows:
-        # Defensive access and consistent formatting
-        tid = str(r.get("id", ""))
-        ts = str(r.get("timestamp", ""))
-        ttype = str(r.get("type", ""))
-        pid = str(r.get("portfolio_id", ""))
-        ticker = str(r.get("ticker", ""))
-        qty = float(r.get("quantity", 0.0))
-        price = float(r.get("price", 0.0))
-        amount = float(r.get("amount", 0.0))
-        bal_after = float(r.get("balance_after", 0.0))
-
         table.add_row(
-            tid,
-            ts,
-            ttype,
-            pid,
-            ticker,
-            f"{qty:,.2f}",
-            f"{price:,.2f}",
-            f"{amount:,.2f}",
-            f"{bal_after:,.2f}",
+            str(r.get("id","")),
+            str(r.get("timestamp","")),
+            str(r.get("type","")),
+            str(r.get("portfolio_id","")),
+            str(r.get("ticker","")),
+            f'{float(r.get("quantity",0.0)):,.2f}',
+            f'{float(r.get("price",0.0)):,.2f}',
+            f'{float(r.get("amount",0.0)):,.2f}',
+            f'{float(r.get("balance_after",0.0)):,.2f}',
         )
-
     _console.print(table)
 
+def admin_view_user_transactions_executor() -> None:
+    # only admins can view other users' transactions
+    u = auth.get_current_user()
+    if not u or u.role != "admin":
+        print_error("Only admins can view other users' transactions.")
+        return
+
+    target = _console.input("Username to inspect: ").strip()
+    if not target:
+        print_error("Username cannot be empty.")
+        return
+
+    try:
+        rows = portfolio_service.list_transactions(username=target)
+        if not rows:
+            print_error(f"No transactions found for '{target}'.")
+            return
+        _render_transactions_table(rows, f"Transactions for {target}")
+    except Exception as e:
+        print_error(str(e))
 
 
 
@@ -558,6 +607,10 @@ _router: Dict[str, MenuFunctions] = {
         executor=delete_user_executor,
         navigator=lambda: constants.MANAGE_USERS_MENU,  # ← NEW
     ),
+    f"{constants.MANAGE_USERS_MENU}.4": MenuFunctions(
+    executor=admin_view_user_transactions_executor,
+    navigator=lambda: constants.MANAGE_USERS_MENU,
+),
 }
 
 
