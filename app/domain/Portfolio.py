@@ -1,44 +1,39 @@
 # app/domain/Portfolio.py
 
-from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Dict
+from typing import List
+from sqlalchemy import String, Integer, ForeignKey
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-@dataclass
-class Portfolio:
-    """
-    Represents a user's investment portfolio.
-    Holdings are kept as a dict: {ticker -> quantity}.
-    """
-    id: int
-    name: str
-    description: str
-    owner_username: str
-    holdings: Dict[str, float] = field(default_factory=dict)
+from app.database import Base
 
-    # --- Encapsulated operations on holdings ---
 
-    def add(self, ticker: str, quantity: float) -> None:
-        if quantity <= 0:
-            raise ValueError("Quantity must be positive.")
-        t = ticker.upper().strip()
-        self.holdings[t] = float(self.holdings.get(t, 0.0) + float(quantity))
+class Portfolio(Base):
+    __tablename__ = "portfolio"
 
-    def remove(self, ticker: str, quantity: float) -> None:
-        if quantity <= 0:
-            raise ValueError("Quantity must be positive.")
-        t = ticker.upper().strip()
-        current = float(self.holdings.get(t, 0.0))
-        if quantity > current:
-            raise ValueError(
-                f"Insufficient quantity to sell: have {current:g}, need {quantity:g}."
-            )
-        new_q = current - float(quantity)
-        if new_q > 0:
-            self.holdings[t] = new_q
-        else:
-            # exactly zero → remove key
-            self.holdings.pop(t, None)
+    # columns
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(String(255), nullable=True)
+    owner: Mapped[str] = mapped_column(
+        String(30),
+        ForeignKey("user.username"),
+        nullable=False,
+    )
 
-    def has(self, ticker: str, quantity: float) -> bool:
-        return float(self.holdings.get(ticker.upper().strip(), 0.0)) >= float(quantity)
+    # relationships
+    user: Mapped["User"] = relationship("User", back_populates="portfolios")
+    investments: Mapped[List["Investment"]] = relationship(
+        "Investment", back_populates="portfolio", cascade="all, delete-orphan"
+    )
+    transactions: Mapped[List["Transaction"]] = relationship(
+        "Transaction", back_populates="portfolio"
+    )
+
+    def __str__(self) -> str:
+        return (
+            f"#Portfolio: name={self.name}; "
+            f"description={self.description}; "
+            f"user={self.user.username}"
+        )
