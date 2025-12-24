@@ -4,10 +4,10 @@ from typing import List
 from sqlalchemy import String, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database import Base
+from app.db import db
 
 
-class User(Base):
+class User(db.Model):
     __tablename__ = "user"
 
     # columns
@@ -20,12 +20,8 @@ class User(Base):
 
 
     # relationships
-    portfolios: Mapped[List["Portfolio"]] = relationship(
-        "Portfolio", back_populates="user"
-    )
-    transactions: Mapped[List["Transaction"]] = relationship(
-        "Transaction", back_populates="user"
-    )
+    portfolios: Mapped[List["Portfolio"]] = relationship("Portfolio", back_populates="user")
+    transactions: Mapped[List["Transaction"]] = relationship("Transaction", back_populates="user")
 
     def __str__(self) -> str:
         return (

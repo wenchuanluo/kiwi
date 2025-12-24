@@ -1,23 +1,17 @@
 # app/domain/Security.py
-# app/domain/Security.py
-
-
 from typing import List
 from sqlalchemy import String, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database import Base
+from app.db import db  
 
-
-class Security(Base):
+class Security(db.Model):  # inherits from db.Model
     __tablename__ = "security"
 
-    # columns
     ticker: Mapped[str] = mapped_column(String(10), primary_key=True)
     issuer: Mapped[str] = mapped_column(String(100), nullable=False)
     price: Mapped[float] = mapped_column(Float, nullable=False)
 
-    # relationships
     investments: Mapped[List["Investment"]] = relationship(
         "Investment", back_populates="security"
     )

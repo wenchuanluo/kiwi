@@ -1,37 +1,25 @@
 # app/service/portfolio_service.py
-
-
 from typing import List, Optional, Callable, Dict, Any
-from app.database import get_session
+
+from app.db import db
 from app.domain import User, Portfolio, Security, Investment, Transaction
-
-
-
 
 class PortfolioOperationError(Exception):
     """Generic error for portfolio operations."""
 
-
-
 def list_portfolios(owner_username: Optional[str] = None) -> List[Portfolio]:
     """Return all portfolios, or only those owned by a specific user."""
-    session = get_session()
-    try:
-        q = session.query(Portfolio)
-        if owner_username is not None:
-            q = q.filter(Portfolio.owner == owner_username)
-        return q.all()
-    finally:
-        session.close()
+    session = db.session
+    q = session.query(Portfolio)
+    if owner_username is not None:
+        q = q.filter(Portfolio.owner == owner_username)
+    return q.all()
 
 
 def get_portfolio(portfolio_id: int) -> Optional[Portfolio]:
     """Retrieve a portfolio by its ID."""
-    session = get_session()
-    try:
-        return session.get(Portfolio, portfolio_id)
-    finally:
-        session.close()
+    session = db.session
+    return session.get(Portfolio, portfolio_id)
 
 
 def create_portfolio(
@@ -39,27 +27,23 @@ def create_portfolio(
     name: str,
     description: Optional[str] = None,
 ) -> Portfolio:
-    """
-    Create a new portfolio for a given owner user.
-    """
-    session = get_session()
-    try:
-        owner = session.get(User, owner_username)
-        if owner is None:
-            raise PortfolioOperationError(f"User '{owner_username}' does not exist.")
+    """Create a new portfolio for a given owner user."""
+    session = db.session
 
-        portfolio = Portfolio(
-            name=name,
-            description=description,
-            owner=owner_username,
-        )
+    owner = session.get(User, owner_username)
+    if owner is None:
+        raise PortfolioOperationError(f"User '{owner_username}' does not exist.")
 
-        session.add(portfolio)
-        session.commit()
-        session.refresh(portfolio)
-        return portfolio
-    finally:
-        session.close()
+    portfolio = Portfolio(
+        name=name,
+        description=description,
+        owner=owner_username,
+    )
+
+    session.add(portfolio)
+    session.commit()
+    session.refresh(portfolio)
+    return portfolio
 
 
 def delete_portfolio(
@@ -74,90 +58,74 @@ def delete_portfolio(
         * still holds any investments (positions), or
         * has transaction history (kept for audit trail).
     """
-    session = get_session()
-    try:
-        portfolio = session.get(Portfolio, portfolio_id)
-        if portfolio is None:
-            raise PortfolioOperationError(
-                f"Portfolio '{portfolio_id}' does not exist."
-            )
+    session = db.session
 
-        # 1) permission check
-        if requesting_user is not None:
-            is_admin = getattr(requesting_user, "role", "user") == "admin"
-            is_owner = requesting_user.username == portfolio.owner
-            if not (is_admin or is_owner):
-                raise PortfolioOperationError(
-                    "You are not allowed to delete this portfolio."
-                )
+    portfolio = session.get(Portfolio, portfolio_id)
+    if portfolio is None:
+        raise PortfolioOperationError(f"Portfolio '{portfolio_id}' does not exist.")
 
-        # 2) cannot delete if there are still investments (positions)
-        position_count = (
-            session.query(Investment)
-            .filter(Investment.portfolio_id == portfolio_id)
-            .count()
+    # permission check
+    if requesting_user is not None:
+        is_admin = getattr(requesting_user, "role", "user") == "admin"
+        is_owner = requesting_user.username == portfolio.owner
+        if not (is_admin or is_owner):
+            raise PortfolioOperationError("You are not allowed to delete this portfolio.")
+
+    # cannot delete if there are still investments (positions)
+    position_count = (
+        session.query(Investment)
+        .filter(Investment.portfolio_id == portfolio_id)
+        .count()
+    )
+    if position_count > 0:
+        raise PortfolioOperationError(
+            "Cannot delete portfolio that still holds investments. "
+            "Please sell all positions first."
         )
-        if position_count > 0:
-            raise PortfolioOperationError(
-                "Cannot delete portfolio that still holds investments. "
-                "Please sell all positions first."
-            )
 
-        # 3) cannot delete if there are transaction records (audit trail)
-        tx_count = (
-            session.query(Transaction)
-            .filter(Transaction.portfolio_id == portfolio_id)
-            .count()
+    # cannot delete if there are transaction records (audit trail)
+    tx_count = (
+        session.query(Transaction)
+        .filter(Transaction.portfolio_id == portfolio_id)
+        .count()
+    )
+    if tx_count > 0:
+        raise PortfolioOperationError(
+            "Cannot delete portfolio that has transaction history. "
+            "Transaction records are kept for audit."
         )
-        if tx_count > 0:
-            raise PortfolioOperationError(
-                "Cannot delete portfolio that has transaction history. "
-                "Transaction records are kept for audit."
-            )
 
-        # 4) safe to delete
-        session.delete(portfolio)
-        session.commit()
-    finally:
-        session.close()
-
-
+    session.delete(portfolio)
+    session.commit()
 
 
 def portfolio_total_value(
     portfolio: Portfolio,
     pricer: Optional[Callable[[str], float]] = None,
 ) -> float:
-    """
-    Calculate the total market value of a portfolio's holdings.
-    """
-    session = get_session()
-    try:
-        investments = (
-            session.query(Investment)
-            .filter(Investment.portfolio_id == portfolio.id)
-            .all()
-        )
+    """Calculate the total market value of a portfolio's holdings."""
+    session = db.session
 
-        total = 0.0
-        for inv in investments:
-            if pricer is not None:
-                price = pricer(inv.ticker)
-            else:
-                if inv.security is None or inv.security.price is None:
-                    raise PortfolioOperationError(
-                        f"No price found for ticker '{inv.ticker}'."
-                    )
-                price = inv.security.price
+    investments = (
+        session.query(Investment)
+        .filter(Investment.portfolio_id == portfolio.id)
+        .all()
+    )
 
-            total += float(inv.quantity) * float(price)
+    total = 0.0
+    for inv in investments:
+        if pricer is not None:
+            price = pricer(inv.ticker)
+        else:
+            if inv.security is None or inv.security.price is None:
+                raise PortfolioOperationError(f"No price found for ticker '{inv.ticker}'.")
+            price = inv.security.price
 
-        return float(total)
-    finally:
-        session.close()
+        total += float(inv.quantity) * float(price)
+
+    return float(total)
 
 
-# Buy/Sell Operations + Transaction Logging
 def _resolve_trade_price(session, ticker: str, price_override: Optional[float]) -> float:
     """Helper to determine execution price."""
     if price_override is not None:
@@ -178,98 +146,82 @@ def buy_security(
     price: Optional[float] = None,
     requesting_username: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Execute a BUY:
-    - portfolio_id: ID of the portfolio should align with an existing portfolio and its owner.
-    - ticker: Security ticker to buy.
-    - quantity: Number of shares to buy (must be positive).
-    - price: Optional override price per share; if None, use current market price.
-    - Deduct user balance
-    - Increase/create investment
-    - Log transaction
-    """
+    """Execute a BUY and log transaction."""
     if quantity <= 0:
         raise PortfolioOperationError("Quantity must be positive for BUY.")
 
-    session = get_session()
-    try:
-        portfolio = session.get(Portfolio, portfolio_id)
-        if portfolio is None:
-            raise PortfolioOperationError("Portfolio does not exist.")
+    session = db.session
 
-        user = session.get(User, portfolio.owner)
-        security = session.get(Security, ticker)
-        
-        # verify portfolio ownership
-        if requesting_username is not None and portfolio.owner != requesting_username:
-            raise PortfolioOperationError("You do not own this portfolio.")
+    portfolio = session.get(Portfolio, portfolio_id)
+    if portfolio is None:
+        raise PortfolioOperationError("Portfolio does not exist.")
 
-        if security is None:
-            raise PortfolioOperationError(f"Security '{ticker}' does not exist.")
+    user = session.get(User, portfolio.owner)
+    security = session.get(Security, ticker)
 
-        exec_price = _resolve_trade_price(session, ticker, price)
-        trade_value = quantity * exec_price
+    # verify portfolio ownership
+    if requesting_username is not None and portfolio.owner != requesting_username:
+        raise PortfolioOperationError("You do not own this portfolio.")
 
-        if user.balance < trade_value:
-            raise PortfolioOperationError("Insufficient balance.")
+    if security is None:
+        raise PortfolioOperationError(f"Security '{ticker}' does not exist.")
 
-        # update or create investment
-        investment = (
-            session.query(Investment)
-            .filter(Investment.portfolio_id == portfolio_id,
-                    Investment.ticker == ticker)
-            .one_or_none()
-        )
+    exec_price = _resolve_trade_price(session, ticker, price)
+    trade_value = quantity * exec_price
 
-        if investment is None:
-            investment = Investment(
-                portfolio_id=portfolio_id,
-                ticker=ticker,
-                quantity=quantity,
-                purchase_price=exec_price,
-            )
-            session.add(investment)
-        else:
-            # avg purchase price
-            old_qty = investment.quantity
-            new_qty = old_qty + quantity
-            old_cost = old_qty * investment.purchase_price
-            new_cost = trade_value
-            investment.quantity = new_qty
-            investment.purchase_price = (old_cost + new_cost) / new_qty
+    if user.balance < trade_value:
+        raise PortfolioOperationError("Insufficient balance.")
 
-        # update balance
-        user.balance -= trade_value
+    investment = (
+        session.query(Investment)
+        .filter(Investment.portfolio_id == portfolio_id,
+                Investment.ticker == ticker)
+        .one_or_none()
+    )
 
-        # log transaction
-        tx = Transaction(
-            type="BUY",
-            username=user.username,
+    if investment is None:
+        investment = Investment(
             portfolio_id=portfolio_id,
             ticker=ticker,
             quantity=quantity,
-            price=exec_price,
-            amount=trade_value,
-            balance_after=user.balance,
+            purchase_price=exec_price,
         )
-        session.add(tx)
+        session.add(investment)
+    else:
+        old_qty = investment.quantity
+        new_qty = old_qty + quantity
+        old_cost = old_qty * investment.purchase_price
+        new_cost = trade_value
+        investment.quantity = new_qty
+        investment.purchase_price = (old_cost + new_cost) / new_qty
 
-        session.commit()
-        session.refresh(user)
-        session.refresh(investment)
+    user.balance -= trade_value
 
-        return {
-            "action": "BUY",
-            "ticker": ticker,
-            "quantity": float(quantity),
-            "price": float(exec_price),
-            "trade_value": float(trade_value),
-            "new_balance": float(user.balance),
-            "new_position_quantity": float(investment.quantity),
-        }
+    tx = Transaction(
+        type="BUY",
+        username=user.username,
+        portfolio_id=portfolio_id,
+        ticker=ticker,
+        quantity=quantity,
+        price=exec_price,
+        amount=trade_value,
+        balance_after=user.balance,
+    )
+    session.add(tx)
 
-    finally:
-        session.close()
+    session.commit()
+    session.refresh(user)
+    session.refresh(investment)
+
+    return {
+        "action": "BUY",
+        "ticker": ticker,
+        "quantity": float(quantity),
+        "price": float(exec_price),
+        "trade_value": float(trade_value),
+        "new_balance": float(user.balance),
+        "new_position_quantity": float(investment.quantity),
+    }
 
 
 def sell_security(
@@ -279,86 +231,70 @@ def sell_security(
     price: Optional[float] = None,
     requesting_username: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Execute a SELL:
-    - Increase user balance
-    - Decrease/remove investment
-    - Log transaction
-    """
+    """Execute a SELL and log transaction."""
     if quantity <= 0:
         raise PortfolioOperationError("Quantity must be positive for SELL.")
 
-    session = get_session()
-    try:
-        portfolio = session.get(Portfolio, portfolio_id)
-        if portfolio is None:
-            raise PortfolioOperationError("Portfolio does not exist.")
+    session = db.session
 
-        user = session.get(User, portfolio.owner)
-        # verify portfolio ownership
-        if requesting_username is not None and portfolio.owner != requesting_username:
-            raise PortfolioOperationError("You do not own this portfolio.")
-        investment = (
-            session.query(Investment)
-            .filter(Investment.portfolio_id == portfolio_id,
-                    Investment.ticker == ticker)
-            .one_or_none()
-        )
+    portfolio = session.get(Portfolio, portfolio_id)
+    if portfolio is None:
+        raise PortfolioOperationError("Portfolio does not exist.")
 
-        if investment is None or investment.quantity < quantity:
-            raise PortfolioOperationError("Insufficient holdings.")
+    user = session.get(User, portfolio.owner)
 
-        exec_price = _resolve_trade_price(session, ticker, price)
-        trade_value = quantity * exec_price
+    if requesting_username is not None and portfolio.owner != requesting_username:
+        raise PortfolioOperationError("You do not own this portfolio.")
 
-        # update investment
-        investment.quantity -= quantity
-        if investment.quantity == 0:
-            session.delete(investment)
+    investment = (
+        session.query(Investment)
+        .filter(Investment.portfolio_id == portfolio_id,
+                Investment.ticker == ticker)
+        .one_or_none()
+    )
 
-        # update balance
-        user.balance += trade_value
+    if investment is None or investment.quantity < quantity:
+        raise PortfolioOperationError("Insufficient holdings.")
 
-        # log tx
-        tx = Transaction(
-            type="SELL",
-            username=user.username,
-            portfolio_id=portfolio_id,
-            ticker=ticker,
-            quantity=quantity,
-            price=exec_price,
-            amount=trade_value,
-            balance_after=user.balance,
-        )
-        session.add(tx)
+    exec_price = _resolve_trade_price(session, ticker, price)
+    trade_value = quantity * exec_price
 
-        session.commit()
-        session.refresh(user)
+    investment.quantity -= quantity
+    if investment.quantity == 0:
+        session.delete(investment)
 
-        return {
-            "action": "SELL",
-            "ticker": ticker,
-            "quantity": float(quantity),
-            "price": float(exec_price),
-            "trade_value": float(trade_value),
-            "new_balance": float(user.balance),
-            "remaining_position_quantity":
-                float(investment.quantity) if investment.quantity else 0.0,
-        }
+    user.balance += trade_value
 
-    finally:
-        session.close()
+    tx = Transaction(
+        type="SELL",
+        username=user.username,
+        portfolio_id=portfolio_id,
+        ticker=ticker,
+        quantity=quantity,
+        price=exec_price,
+        amount=trade_value,
+        balance_after=user.balance,
+    )
+    session.add(tx)
+
+    session.commit()
+    session.refresh(user)
+
+    return {
+        "action": "SELL",
+        "ticker": ticker,
+        "quantity": float(quantity),
+        "price": float(exec_price),
+        "trade_value": float(trade_value),
+        "new_balance": float(user.balance),
+        "remaining_position_quantity": float(investment.quantity) if investment.quantity else 0.0,
+    }
 
 
-
-# List transactions
 def list_transactions(username: Optional[str] = None):
     """List transactions for a specific user or all users (admin)."""
-    session = get_session()
-    try:
-        q = session.query(Transaction)
-        if username:
-            q = q.filter(Transaction.username == username)
-        return q.order_by(Transaction.timestamp.desc()).all()
-    finally:
-        session.close()
+    session = db.session
+    q = session.query(Transaction)
+    if username:
+        q = q.filter(Transaction.username == username)
+    return q.order_by(Transaction.timestamp.desc()).all()

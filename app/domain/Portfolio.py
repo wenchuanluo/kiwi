@@ -1,19 +1,14 @@
 # app/domain/Portfolio.py
-
 from typing import List
 from sqlalchemy import String, Integer, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database import Base
+from app.db import db  
 
-
-class Portfolio(Base):
+class Portfolio(db.Model):  
     __tablename__ = "portfolio"
 
-    # columns
-    id: Mapped[int] = mapped_column(
-        Integer, primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(String(255), nullable=True)
     owner: Mapped[str] = mapped_column(
@@ -22,7 +17,6 @@ class Portfolio(Base):
         nullable=False,
     )
 
-    # relationships
     user: Mapped["User"] = relationship("User", back_populates="portfolios")
     investments: Mapped[List["Investment"]] = relationship(
         "Investment", back_populates="portfolio", cascade="all, delete-orphan"

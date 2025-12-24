@@ -1,29 +1,15 @@
 # app/domain/Transaction.py
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
-from typing import TYPE_CHECKING, List
-from typing import Optional
-from typing import Union
-from typing import Dict
-from datetime import datetime
-
-from sqlalchemy import (
-    Integer,
-    String,
-    Float,
-    DateTime,
-    ForeignKey,
-)
+from sqlalchemy import Integer, String, Float, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database import Base
+from app.db import db  
 
-
-class Transaction(Base):
+class Transaction(db.Model):  # inherits from db.Model
     __tablename__ = "transaction"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
     timestamp: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
@@ -50,25 +36,12 @@ class Transaction(Base):
 
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     price: Mapped[float] = mapped_column(Float, nullable=False)
-
-    # BUY cost or SELL proceeds (always positive)
-    amount: Mapped[float] = mapped_column(Float, nullable=False)
-
+    amount: Mapped[float] = mapped_column(Float, nullable=False)         # cost/proceeds
     balance_after: Mapped[float] = mapped_column(Float, nullable=False)
 
-    # relationships
-    user: Mapped["User"] = relationship(
-        "User",
-        back_populates="transactions",
-    )
-    portfolio: Mapped["Portfolio"] = relationship(
-        "Portfolio",
-        back_populates="transactions",
-    )
-    security: Mapped["Security"] = relationship(
-        "Security",
-        back_populates="transactions",
-    )
+    user: Mapped["User"] = relationship("User", back_populates="transactions")
+    portfolio: Mapped["Portfolio"] = relationship("Portfolio", back_populates="transactions")
+    security: Mapped["Security"] = relationship("Security", back_populates="transactions")
 
     def __str__(self) -> str:
         return (

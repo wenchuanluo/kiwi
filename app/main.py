@@ -1,9 +1,8 @@
-# main.py 
-from .cli.menu_printer import print_menu 
-from .cli import constants
+# app/main.py
+from app import create_app
+from app.config import Config
 
-def main() -> None:
-    print_menu(constants.LOGIN_MENU)
+app = create_app(Config)
 
 if __name__ == "__main__":
-    main()
+    app.run()
